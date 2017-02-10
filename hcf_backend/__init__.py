@@ -15,6 +15,9 @@ from hubstorage import HubstorageClient
 import six
 
 
+logger = logging.getLogger(__name__)
+
+
 class HCFStates(MemoryStates):
 
     def __init__(self, auth, project_id, colname, cache_size_limit, cleanup_on_start):
@@ -24,7 +27,7 @@ class HCFStates(MemoryStates):
         project = self._hs_client.get_project(self.projectid)
         self._collections = project.collections
         self._colname = colname + "_states"
-        self.logger = logging.getLogger("hcf.states")
+        self.logger = logger.getChild(self.__class__.__name__)
 
         if cleanup_on_start:
             self._cleanup()
@@ -42,7 +45,7 @@ class HCFStates(MemoryStates):
         while True:
             nextstart = None
             params = {'method':'DELETE',
-                      'url':'https://storage.scrapinghub.com/collections/%d/s/%s' % (self.projectid, self._colname),
+                      'url':'https://storage.scrapinghub.com/collections/%s/s/%s' % (self.projectid, self._colname),
                       'auth':self._hs_client.auth}
             if nextstart:
                 params['prefix'] = nextstart
@@ -87,7 +90,7 @@ class HCFStates(MemoryStates):
 
             prepared_keys.append("meta=_key")
             params = {'method':'GET',
-                      'url':'https://storage.scrapinghub.com/collections/%d/s/%s' % (self.projectid, self._colname),
+                      'url':'https://storage.scrapinghub.com/collections/%s/s/%s' % (self.projectid, self._colname),
                       'params':str('&').join(prepared_keys),
                       'auth':self._hs_client.auth}
             start = time()
@@ -149,7 +152,7 @@ class HCFClientWrapper(object):
         self._links_count = defaultdict(int)
         self._links_to_flush_count = defaultdict(int)
         self._hcf_retries = 10
-        self.logger = logging.getLogger("hubstorage-wrapper")
+        self.logger = logger.getChild(self.__class__.__name__)
 
     def add_request(self, slot, request):
         self._hcf.add(self._frontier, slot, [request])
@@ -232,7 +235,7 @@ class HCFQueue(Queue):
                                     flush_interval=flush_interval)
         self.hcf_slots_count = slots_count
         self.hcf_slot_prefix = slot_prefix
-        self.logger = logging.getLogger("hcf.queue")
+        self.logger = logger.getChild(self.__class__.__name__)
         self.consumed_batches_ids = dict()
         self.partitions = [self.hcf_slot_prefix+str(i) for i in range(0, slots_count)]
         self.partitioner = partitioner_cls(self.partitions)
@@ -296,8 +299,16 @@ class HCFQueue(Queue):
         self.logger.info('scheduled %d links' % scheduled)
 
     def _process_hcf_link(self, link, score):
-        link.meta.pop(b'origin_is_frontier', None)
-        hcf_request = {'fp': getattr(link, 'meta', {}).get('hcf_fingerprint', link.url)}
+        link_meta = getattr(link, 'meta', {})
+        link_meta.pop(b'origin_is_frontier', None)
+        scrapy_meta = link_meta.get(b'scrapy_meta', {})
+        hcf_request = (
+            link_meta.get('hcf_request')
+            or scrapy_meta.get('hcf_request')
+            or {}
+        )
+        hcf_request.setdefault('fp', link_meta.get('hcf_fingerprint', link.url))
+        hcf_request.setdefault('p', link_meta.get(b'scrapy_priority', 0)),
         qdata = {'request': {
                     'method': link.method,
                     'headers': link.headers,
