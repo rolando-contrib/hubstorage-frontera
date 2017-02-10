@@ -282,9 +282,13 @@ class HCFQueue(Queue):
                     'meta': link.meta}
                 }
         hcf_request['qdata'] = _convert_and_save_type(qdata)
-        partition_id = self.partitioner.partition(link.meta[b'fingerprint'])
+        partition_id = self.partition_for(link)
         slot = self.hcf_slot_prefix + str(partition_id)
         self.hcf.add_request(slot, hcf_request)
+
+    def partition_for(self, link):
+        """Returns a partition ID for given link."""
+        return self.partitioner.partition(link.meta[b'fingerprint'])
 
     def count(self):
         """
