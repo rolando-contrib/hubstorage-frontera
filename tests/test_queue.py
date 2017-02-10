@@ -2,13 +2,14 @@
 import config
 from hcf_backend import HCFQueue
 from frontera.core.models import Request
+from frontera.contrib.backends.partitioners import FingerprintPartitioner
 from time import sleep
 import logging
 
 
 def test_queue():
     logging.basicConfig(level=logging.DEBUG)
-    queue = HCFQueue(config.API_KEY, config.PROJECT_ID, config.FRONTIER_NAME, 10000, 1, 1, "", True)
+    queue = HCFQueue(config.API_KEY, config.PROJECT_ID, config.FRONTIER_NAME, 10000, 1, 1, "", True, FingerprintPartitioner)
 
     queue.frontier_start()
 

@@ -8,9 +8,9 @@ import requests as requests_lib
 from frontera import Request
 from frontera.contrib.backends import CommonBackend
 from frontera.contrib.backends.memory import MemoryStates, MemoryMetadata
-from frontera.contrib.backends.partitioners import FingerprintPartitioner
 from frontera.contrib.backends.remote.codecs.json import _convert_and_save_type, _convert_from_saved_type
 from frontera.core.components import Queue
+from frontera.utils.misc import load_object
 from hubstorage import HubstorageClient
 import six
 
@@ -28,6 +28,15 @@ class HCFStates(MemoryStates):
 
         if cleanup_on_start:
             self._cleanup()
+
+    @classmethod
+    def from_manager(cls, manager):
+        s = manager.settings
+        return cls(s.get('HCF_AUTH', None),
+                   s.get('HCF_PROJECT_ID'),
+                   s.get('HCF_FRONTIER'),
+                   s.get('HCF_STATES_CACHE_SIZE', 20000),
+                   s.get('HCF_CLEANUP_ON_START', False))
 
     def _cleanup(self):
         while True:
@@ -215,7 +224,7 @@ class HCFClientWrapper(object):
 
 class HCFQueue(Queue):
     def __init__(self, auth, project_id, frontier, batch_size, flush_interval, slots_count, slot_prefix,
-                 cleanup_on_start):
+                 cleanup_on_start, partitioner_cls):
         self.hcf = HCFClientWrapper(auth=auth,
                                     project_id=project_id,
                                     frontier=frontier,
@@ -226,11 +235,25 @@ class HCFQueue(Queue):
         self.logger = logging.getLogger("hcf.queue")
         self.consumed_batches_ids = dict()
         self.partitions = [self.hcf_slot_prefix+str(i) for i in range(0, slots_count)]
-        self.partitioner = FingerprintPartitioner(self.partitions)
+        self.partitioner = partitioner_cls(self.partitions)
 
         if cleanup_on_start:
             for partition_id in self.partitions:
                 self.hcf.delete_slot(partition_id)
+
+    @classmethod
+    def from_manager(cls, manager):
+        s = manager.settings
+        partitioner_cls = load_object(s.get('HCF_PARTITIONER_CLASS', 'frontera.contrib.backends.partitioners.FingerprintPartitioner'))
+        return cls(s.get('HCF_AUTH', None),
+                   s.get('HCF_PROJECT_ID'),
+                   s.get('HCF_FRONTIER'),
+                   s.get('HCF_PRODUCER_BATCH_SIZE', 10000),
+                   s.get('HCF_PRODUCER_FLUSH_INTERVAL', 30),
+                   s.get('HCF_PRODUCER_NUMBER_OF_SLOTS', 8),
+                   s.get('HCF_PRODUCER_SLOT_PREFIX', ''),
+                   s.get('HCF_CLEANUP_ON_START', False),
+                   partitioner_cls)
 
     def frontier_start(self):
         pass
@@ -302,29 +325,24 @@ class HCFBackend(CommonBackend):
 
     name = 'HCF Backend'
 
-    def __init__(self, manager):
+    def __init__(self, manager, metadata, queue, states):
         settings = manager.settings
-        self._metadata = MemoryMetadata()
-        self._queue = HCFQueue(settings.get('HCF_AUTH', None),
-                               settings.get('HCF_PROJECT_ID'),
-                               settings.get('HCF_FRONTIER'),
-                               settings.get('HCF_PRODUCER_BATCH_SIZE', 10000),
-                               settings.get('HCF_PRODUCER_FLUSH_INTERVAL', 30),
-                               settings.get('HCF_PRODUCER_NUMBER_OF_SLOTS', 8),
-                               settings.get('HCF_PRODUCER_SLOT_PREFIX', ''),
-                               settings.get('HCF_CLEANUP_ON_START', False))
-        self._states = HCFStates(settings.get('HCF_AUTH', None),
-                                 settings.get('HCF_PROJECT_ID'),
-                                 settings.get('HCF_FRONTIER'),
-                                 20000,
-                                 settings.get('HCF_CLEANUP_ON_START', False))
+        self._metadata = metadata
+        self._queue = queue
+        self._states = states
         self.max_iterations = settings.get('HCF_CONSUMER_MAX_BATCHES', 0)
         self.consumer_slot = settings.get('HCF_CONSUMER_SLOT', 0)
         self.iteration = manager.iteration
 
     @classmethod
     def from_manager(cls, manager):
-        return cls(manager)
+        s = manager.settings
+        queue_cls = load_object(s.get('HCF_QUEUE_CLASS', 'hcf_backend.HCFQueue'))
+        states_cls = load_object(s.get('HCF_STATES_CLASS', 'hcf_backend.HCFStates'))
+        metadata = MemoryMetadata()
+        queue = queue_cls.from_manager(manager)
+        states = states_cls.from_manager(manager)
+        return cls(manager, metadata, queue, states)
 
     @property
     def metadata(self):
