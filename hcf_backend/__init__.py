@@ -273,8 +273,20 @@ class HCFQueue(Queue):
         self.logger.info('scheduled %d links' % scheduled)
 
     def _process_hcf_link(self, link, score):
-        link.meta.pop(b'origin_is_frontier', None)
-        hcf_request = {'fp': getattr(link, 'meta', {}).get('hcf_fingerprint', link.url)}
+        link_meta = getattr(link, 'meta', {})
+        link_meta.pop(b'origin_is_frontier', None)
+        scrapy_meta = link_meta.get(b'scrapy_meta', {})
+        hcf_request = (
+            link_meta.get('hcf_request')
+            or scrapy_meta.get('hcf_request')
+            or {}
+        )
+        hcf_request.setdefault('fp', link_meta.get('hcf_fingerprint', link.url))
+
+        # Priorities in HCF have opposite meaning than in Scrapy.
+        scrapy_priority = link_meta.get(b'scrapy_priority', 0)
+        hcf_request.setdefault('p', -1 * scrapy_priority)
+
         qdata = {'request': {
                     'method': link.method,
                     'headers': link.headers,
